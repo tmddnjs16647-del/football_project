@@ -33,7 +33,8 @@ app.onError((err, c) => {
 app.get('/api/data', async (c) => {
   const { results: players } = await c.env.DB.prepare('SELECT * FROM players ORDER BY id DESC').all()
   const { results: matches } = await c.env.DB.prepare('SELECT * FROM matches ORDER BY date ASC').all()
-  return c.json({ players, matches })
+  const stadium = await c.env.DB.prepare('SELECT * FROM stadium WHERE id = 1').first()
+  return c.json({ players, matches, stadium })
 })
 
 // --- Public API: Submit Requests ---
@@ -65,6 +66,48 @@ app.post('/api/admin/login', async (c) => {
     return c.json({ success: true })
   }
   return c.json({ success: false }, 401)
+})
+
+// --- Admin API: Manage Stadium ---
+app.post('/api/admin/stadium', async (c) => {
+  const { address, description, contact_info } = await c.req.json()
+
+  if (address) {
+    // Geocode address and update everything
+    try {
+      const geoResponse = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`, {
+        headers: { 'User-Agent': 'BandiFC/1.0' }
+      });
+      const geoData = await geoResponse.json()
+
+      if (geoData && geoData.length > 0) {
+        const { lat, lon } = geoData[0]
+        await c.env.DB.prepare('UPDATE stadium SET address = ?, lat = ?, lng = ?, description = ?, contact_info = ? WHERE id = 1')
+          .bind(address, parseFloat(lat), parseFloat(lon), description, contact_info)
+          .run()
+        return c.json({ success: true })
+      } else {
+        // Only update the text fields if geocoding fails but an address was provided
+        await c.env.DB.prepare('UPDATE stadium SET address = ?, description = ?, contact_info = ? WHERE id = 1')
+          .bind(address, description, contact_info)
+          .run()
+        return c.json({ success: true, message: '주소 좌표를 찾지 못했지만, 텍스트 정보는 저장되었습니다.' })
+      }
+    } catch (e) {
+      console.error('Geocoding error:', e)
+      // Fallback to saving text fields even if geocoding fails
+      await c.env.DB.prepare('UPDATE stadium SET address = ?, description = ?, contact_info = ? WHERE id = 1')
+        .bind(address, description, contact_info)
+        .run()
+      return c.json({ success: true, message: '주소 변환 중 오류가 발생했지만, 텍스트 정보는 저장되었습니다.' })
+    }
+  } else {
+    // Update only description and contact info
+    await c.env.DB.prepare('UPDATE stadium SET description = ?, contact_info = ? WHERE id = 1')
+      .bind(description, contact_info)
+      .run()
+    return c.json({ success: true })
+  }
 })
 
 // --- Admin API: Manage Players ---
