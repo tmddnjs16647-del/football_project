@@ -213,7 +213,7 @@ function renderPlayers(filter) {
         const imgUrl = player.image || `https://ui-avatars.com/api/?name=${encodeURIComponent(player.name)}&background=random&color=fff&size=256`;
         
         return `
-            <div class="group relative bg-team-card rounded-xl overflow-hidden shadow-lg border border-white/5 hover:border-team-primary/50 transition-all duration-300 hover:-translate-y-2" style="animation: fadeInUp 0.5s ease-out ${index * 0.1}s backwards">
+            <div class="group relative bg-team-card rounded-xl overflow-hidden shadow-lg border border-white/5 hover:border-team-primary/50 transition-all duration-300 hover:-translate-y-2 min-w-[160px] w-40 md:min-w-0 md:w-auto snap-center" style="animation: fadeInUp 0.5s ease-out ${index * 0.1}s backwards">
                 
                 <!-- Card Background Effect -->
                 <div class="absolute inset-0 bg-gradient-to-b from-transparent to-black/80 z-10"></div>
@@ -223,15 +223,15 @@ function renderPlayers(filter) {
                     <img src="${imgUrl}" alt="${player.name}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
                     
                     <!-- Number Badge -->
-                    <div class="absolute top-4 right-4 z-20 bg-team-primary text-team-darker font-game font-bold text-xl w-10 h-10 flex items-center justify-center rounded shadow-lg skew-x-[-10deg]">
+                    <div class="absolute top-4 right-4 z-20 bg-team-primary text-team-darker font-game font-bold text-lg md:text-xl w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded shadow-lg skew-x-[-10deg]">
                         <span class="skew-x-[10deg]">${player.number}</span>
                     </div>
                 </div>
 
                 <!-- Info Area -->
-                <div class="absolute bottom-0 left-0 right-0 p-6 z-20">
-                    <p class="text-team-primary text-sm font-bold mb-1 tracking-wider uppercase">${player.role || player.position}</p>
-                    <h3 class="text-3xl font-kor-title text-white drop-shadow-md">${player.name}</h3>
+                <div class="absolute bottom-0 left-0 right-0 p-4 md:p-6 z-20">
+                    <p class="text-team-primary text-xs md:text-sm font-bold mb-1 tracking-wider uppercase">${player.role || player.position}</p>
+                    <h3 class="text-xl md:text-3xl font-kor-title text-white drop-shadow-md truncate">${player.name}</h3>
                 </div>
 
                 <!-- Hover Overlay -->

@@ -314,9 +314,9 @@ app.get('/', (c) => {
                 </div>
 
                 <!-- Player Grid -->
-                <div id="player-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div id="player-grid" class="flex overflow-x-auto snap-x snap-mandatory gap-4 pb-8 md:grid md:grid-cols-3 xl:grid-cols-4 md:gap-6 md:overflow-visible md:pb-0 scrollbar-hide">
                     <!-- Players will be injected by JS -->
-                    <div class="col-span-full text-center py-8">
+                    <div class="col-span-full w-full text-center py-8">
                         <i class="fas fa-spinner fa-spin text-team-primary text-2xl"></i>
                     </div>
                 </div>
