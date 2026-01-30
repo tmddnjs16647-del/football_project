@@ -8,4 +8,4 @@ CREATE TABLE IF NOT EXISTS stadium (
 );
 
 -- Insert initial stadium data
-INSERT OR IGNORE INTO stadium (id, address, lat, lng) VALUES (1, '대구 달성군 옥포읍 간경리 10 시민체육공원 축구장', 35.7958, 128.4907);
+INSERT OR IGNORE INTO stadium (id, address, lat, lng) VALUES (1, '대구 달성군 옥포읍 간경리 10 축구장', 35.6921586, 128.4162393);
