@@ -1,13 +1,19 @@
 {
   "name": "football0project",
-  "main": "src/index.tsx",
   "compatibility_date": "2024-01-01",
   "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "dist",
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "webapp-production",
+      "database_name": "football0db",
       "database_id": "a1ace833-653a-4812-97da-0452ff58c794"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FOOTBALL_BUCKET",
+      "bucket_name": "football"
     }
   ]
 }

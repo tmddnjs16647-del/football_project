@@ -33,7 +33,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     initStadium();
     initForms();
     initModals();
+    initSlideshow();
 });
+
+function initSlideshow() {
+    const container = document.getElementById('slideshow-container');
+    if (!container) return;
+
+    const slides = container.querySelectorAll('.slide');
+    if (slides.length <= 1) return; // Don't start slideshow if only one image
+
+    let currentSlide = 0;
+
+    function showSlide(index) {
+        slides.forEach((slide, i) => {
+            slide.classList.remove('active');
+        });
+        slides[index].classList.add('active');
+    }
+
+    function nextSlide() {
+        currentSlide = (currentSlide + 1) % slides.length;
+        showSlide(currentSlide);
+    }
+
+    // Change slide every 5 seconds
+    setInterval(nextSlide, 5000);
+}
 
 async function loadTeamData() {
     try {

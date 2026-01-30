@@ -5,6 +5,7 @@ import { getCookie, setCookie } from 'hono/cookie'
 
 type Bindings = {
   DB: D1Database
+  FOOTBALL_BUCKET: R2Bucket
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -34,7 +35,8 @@ app.get('/api/data', async (c) => {
   const { results: players } = await c.env.DB.prepare('SELECT * FROM players ORDER BY id DESC').all()
   const { results: matches } = await c.env.DB.prepare('SELECT * FROM matches ORDER BY date ASC').all()
   const stadium = await c.env.DB.prepare('SELECT * FROM stadium WHERE id = 1').first()
-  return c.json({ players, matches, stadium })
+  const { results: stadiumImages } = await c.env.DB.prepare('SELECT * FROM stadium_images ORDER BY uploaded_at DESC').all()
+  return c.json({ players, matches, stadium, stadiumImages })
 })
 
 // --- Public API: Submit Requests ---
@@ -70,7 +72,7 @@ app.post('/api/admin/login', async (c) => {
 
 // --- Admin API: Manage Stadium ---
 app.post('/api/admin/stadium', async (c) => {
-  const { address, description, contact_info } = await c.req.json()
+  const { address, description, contact_info, image_url } = await c.req.json()
 
   if (address) {
     // Geocode address and update everything
@@ -82,33 +84,88 @@ app.post('/api/admin/stadium', async (c) => {
 
       if (geoData && geoData.length > 0) {
         const { lat, lon } = geoData[0]
-        await c.env.DB.prepare('UPDATE stadium SET address = ?, lat = ?, lng = ?, description = ?, contact_info = ? WHERE id = 1')
-          .bind(address, parseFloat(lat), parseFloat(lon), description, contact_info)
+        await c.env.DB.prepare('UPDATE stadium SET address = ?, lat = ?, lng = ?, description = ?, contact_info = ?, image_url = ? WHERE id = 1')
+          .bind(address, parseFloat(lat), parseFloat(lon), description, contact_info, image_url)
           .run()
         return c.json({ success: true })
       } else {
         // Only update the text fields if geocoding fails but an address was provided
-        await c.env.DB.prepare('UPDATE stadium SET address = ?, description = ?, contact_info = ? WHERE id = 1')
-          .bind(address, description, contact_info)
+        await c.env.DB.prepare('UPDATE stadium SET address = ?, description = ?, contact_info = ?, image_url = ? WHERE id = 1')
+          .bind(address, description, contact_info, image_url)
           .run()
         return c.json({ success: true, message: '주소 좌표를 찾지 못했지만, 텍스트 정보는 저장되었습니다.' })
       }
     } catch (e) {
       console.error('Geocoding error:', e)
       // Fallback to saving text fields even if geocoding fails
-      await c.env.DB.prepare('UPDATE stadium SET address = ?, description = ?, contact_info = ? WHERE id = 1')
-        .bind(address, description, contact_info)
+      await c.env.DB.prepare('UPDATE stadium SET address = ?, description = ?, contact_info = ?, image_url = ? WHERE id = 1')
+        .bind(address, description, contact_info, image_url)
         .run()
       return c.json({ success: true, message: '주소 변환 중 오류가 발생했지만, 텍스트 정보는 저장되었습니다.' })
     }
   } else {
     // Update only description and contact info
-    await c.env.DB.prepare('UPDATE stadium SET description = ?, contact_info = ? WHERE id = 1')
-      .bind(description, contact_info)
+    await c.env.DB.prepare('UPDATE stadium SET description = ?, contact_info = ?, image_url = ? WHERE id = 1')
+      .bind(description, contact_info, image_url)
       .run()
     return c.json({ success: true })
   }
 })
+
+// --- Admin API: Manage Stadium Images (R2) ---
+
+// 1. Get a pre-signed URL for upload
+app.post('/api/admin/stadium/upload-url', async (c) => {
+  const { filename } = await c.req.json();
+  const key = `stadium-images/${Date.now()}-${filename}`;
+
+  const signedUrl = await c.env.FOOTBALL_BUCKET.createPresignedUrl({
+    key,
+    method: 'PUT',
+    expires: 900, // 15 minutes
+  });
+
+  // The client will upload to `signedUrl` and the final object URL will be this.
+  const objectUrl = new URL(c.req.url).origin + '/' + key;
+
+  return c.json({ signedUrl, objectUrl, key });
+});
+
+// 2. Add a new image URL to the database after upload
+app.post('/api/admin/stadium/images', async (c) => {
+  const { imageUrl } = await c.req.json();
+  if (!imageUrl) return c.json({ success: false, message: 'Image URL is required' }, 400);
+
+  await c.env.DB.prepare('INSERT INTO stadium_images (image_url) VALUES (?)').bind(imageUrl).run();
+  return c.json({ success: true });
+});
+
+// 3. Delete an image
+app.delete('/api/admin/stadium/images/:id', async (c) => {
+  const id = c.req.param('id');
+  
+  // First, get the image URL from the DB
+  const image = await c.env.DB.prepare('SELECT image_url FROM stadium_images WHERE id = ?').bind(id).first<{ image_url: string }>();
+
+  if (image && image.image_url) {
+    try {
+      // Extract the key from the URL
+      const url = new URL(image.image_url);
+      const key = url.pathname.substring(1); // Remove leading '/'
+      
+      // Delete from R2
+      await c.env.FOOTBALL_BUCKET.delete(key);
+    } catch (e) {
+      console.error(`Failed to delete from R2: ${e}`);
+      // Don't block DB deletion even if R2 fails
+    }
+  }
+
+  // Then, delete from the DB
+  await c.env.DB.prepare('DELETE FROM stadium_images WHERE id = ?').bind(id).run();
+  
+  return c.json({ success: true });
+});
 
 // --- Admin API: Manage Players ---
 app.post('/api/admin/players', async (c) => {
@@ -170,7 +227,28 @@ app.delete('/api/admin/requests/:type/:id', async (c) => {
 })
 
 // --- Page Routes ---
-app.get('/', (c) => {
+app.get('/', async (c) => {
+  type StadiumImage = { id: number; image_url: string };
+  type Stadium = {
+    address: string;
+    description: string;
+    contact_info: string;
+    lat: number;
+    lng: number;
+  };
+  const stadium: Stadium | null = await c.env.DB.prepare('SELECT * FROM stadium WHERE id = 1').first();
+  const { results: stadiumImages } = await c.env.DB.prepare('SELECT * FROM stadium_images ORDER BY uploaded_at ASC').all<StadiumImage>();
+
+  // 데이터베이스에서 가져온 주소의 일부를 잘라내어 소제목으로 사용
+  const stadiumSubtitle = stadium ? stadium.address.split(' ')[0] + ' ' + stadium.address.split(' ')[1] : '정보 없음';
+
+  const renderContactInfo = (contactInfo: string | undefined) => {
+    if (!contactInfo) return '<p class="text-gray-400">연락처 정보가 없습니다.</p>';
+    return contactInfo.split('\n').map(line => `<p class="text-gray-400">${line}</p>`).join('');
+  };
+
+  const mapSrc = stadium ? `https://www.google.com/maps?q=${stadium.lat},${stadium.lng}&output=embed&z=15` : "https://www.google.com/maps?q=35.7958,128.4907&output=embed&z=15";
+
   return c.html(`
     <!DOCTYPE html>
     <html lang="ko" class="scroll-smooth">
@@ -237,11 +315,11 @@ app.get('/', (c) => {
 
         <!-- Hero Section -->
         <header id="home" class="relative h-screen min-h-[600px] flex items-center justify-center overflow-hidden">
-            <!-- Background Image with Overlay -->
-            <div class="absolute inset-0 z-0">
-                <img src="https://images.unsplash.com/photo-1522778119026-d647f0565c6d?q=80&w=2070&auto=format&fit=crop" 
-                     alt="Stadium" 
-                     class="w-full h-full object-cover opacity-60">
+            <!-- Slideshow Container -->
+            <div id="slideshow-container" class="absolute inset-0 z-0">
+                ${stadiumImages.map((img, index) => `
+                    <div class="slide ${index === 0 ? 'active' : ''}" style="background-image: url('${img.image_url}');"></div>
+                `).join('')}
                 <div class="absolute inset-0 bg-gradient-to-t from-team-dark via-team-dark/50 to-transparent"></div>
             </div>
             
@@ -334,7 +412,7 @@ app.get('/', (c) => {
                         <div class="relative bg-team-card rounded-xl overflow-hidden border border-white/10 h-[400px]">
                             <!-- Placeholder for Map -->
                             <iframe 
-                                src="https://www.google.com/maps?q=35.7958,128.4907&output=embed&z=15" 
+                                src="${mapSrc}"
                                 width="100%" 
                                 height="100%" 
                                 style="border:0;" 
@@ -352,7 +430,7 @@ app.get('/', (c) => {
                     <div class="w-full lg:w-1/2 space-y-8">
                         <div>
                             <h2 class="text-4xl font-game text-white mb-2">STADIUM INFO</h2>
-                            <p class="text-team-primary text-xl font-kor-title">옥포읍 간경리 10</p>
+                            <p class="text-team-primary text-xl font-kor-title">${stadiumSubtitle}</p>
                         </div>
 
                         <div class="space-y-6">
@@ -362,8 +440,8 @@ app.get('/', (c) => {
                                 </div>
                                 <div>
                                     <h3 class="text-xl font-bold mb-1">오시는 길</h3>
-                                    <p class="text-gray-400">대구 달성군 옥포읍 간경리 10 시민체육공원 축구장</p>
-                                    <p class="text-sm text-gray-500 mt-1">* 주차장 완비 / 야간 조명 가능</p>
+                                    <p class="text-gray-400">${stadium?.address ?? '주소 정보 없음'}</p>
+                                    <p class="text-sm text-gray-500 mt-1">${stadium?.description ?? ''}</p>
                                 </div>
                             </div>
 
@@ -373,8 +451,7 @@ app.get('/', (c) => {
                                 </div>
                                 <div>
                                     <h3 class="text-xl font-bold mb-1">팀 연락처</h3>
-                                    <p class="text-gray-400">총무: 010-1234-5678</p>
-                                    <p class="text-gray-400">주장: 010-9876-5432</p>
+                                    ${renderContactInfo(stadium?.contact_info)}
                                 </div>
                             </div>
                         </div>
@@ -549,7 +626,7 @@ app.get('/', (c) => {
         <script src="/static/app.js"></script>
     </body>
     </html>
-  `)
+  `);
 })
 
 app.get('/admin', (c) => {
@@ -591,6 +668,24 @@ app.get('/admin', (c) => {
 
             <div class="container mx-auto p-4 lg:p-8 grid grid-cols-1 xl:grid-cols-2 gap-8 flex-1">
                 
+                <!-- Stadium Image Management -->
+                <div class="bg-slate-800 rounded-xl p-6 border border-slate-700 flex flex-col h-full">
+                    <h2 class="text-2xl font-bold mb-4 flex items-center gap-2"><i class="fas fa-images text-lime-400"></i> 배경 사진 관리</h2>
+                    
+                    <!-- Image Upload Form -->
+                    <form id="upload-image-form" class="bg-slate-900 p-4 rounded-lg mb-6 flex gap-4 items-center">
+                        <input type="file" id="stadium-image-upload" accept="image/jpeg,image/png,image/webp" required class="flex-grow w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-lime-400 file:text-slate-900 hover:file:bg-lime-300">
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white py-2 px-4 rounded font-bold">사진 업로드</button>
+                    </form>
+
+                    <!-- Image List -->
+                    <p class="text-sm text-gray-400 mb-2">현재 등록된 사진 (<span id="image-count">0</span>개)</p>
+                    <div id="admin-image-list" class="space-y-3 overflow-y-auto pr-2 flex-1">
+                        <!-- Loaded by JS -->
+                        <div class="text-center text-gray-500 py-8">로딩 중...</div>
+                    </div>
+                </div>
+
                 <!-- Player Management -->
                 <div class="bg-slate-800 rounded-xl p-6 border border-slate-700 flex flex-col h-full max-h-[800px]">
                     <h2 class="text-2xl font-bold mb-4 flex items-center gap-2"><i class="fas fa-users text-lime-400"></i> 선수단 관리</h2>
@@ -733,9 +828,10 @@ app.get('/admin', (c) => {
             // --- Data Loading ---
             async function loadData() {
                 const res = await axios.get('/api/data');
-                const { players, matches } = res.data;
+                const { players, matches, stadium, stadiumImages } = res.data;
                 renderAdminPlayers(players);
                 renderAdminMatches(matches);
+                renderAdminImages(stadiumImages);
             }
 
             async function loadRequests() {
@@ -782,6 +878,84 @@ app.get('/admin', (c) => {
                     </div>
                 \`).join('');
             }
+
+            function renderAdminImages(images) {
+                const list = document.getElementById('admin-image-list');
+                document.getElementById('image-count').textContent = images.length;
+                if (images.length === 0) {
+                    list.innerHTML = '<div class="text-center text-gray-500 py-8">등록된 사진이 없습니다.</div>';
+                    return;
+                }
+                list.innerHTML = images.map(img => \`
+                    <div class="flex justify-between items-center bg-slate-900 p-2 pr-4 rounded border border-slate-700">
+                        <div class="flex items-center gap-3">
+                            <img src="\${img.image_url}" class="w-16 h-10 object-cover rounded">
+                            <a href="\${img.image_url}" target="_blank" class="text-xs text-gray-400 hover:underline">.../\${img.image_url.split('/').pop()}</a>
+                        </div>
+                        <button onclick="deleteImage(\${img.id})" class="text-red-500 hover:text-red-400 px-2">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                \`).join('');
+            }
+            
+            document.getElementById('upload-image-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const fileInput = document.getElementById('stadium-image-upload');
+                const file = fileInput.files[0];
+                if (!file) {
+                    alert('사진 파일을 선택해주세요.');
+                    return;
+                }
+
+                const submitButton = e.target.querySelector('button[type="submit"]');
+                submitButton.disabled = true;
+                submitButton.textContent = '업로드 중...';
+
+                try {
+                    // 1. Get pre-signed URL from our server for a PUT request
+                    const presignResponse = await axios.post('/api/admin/stadium/upload-url', {
+                        filename: file.name,
+                    });
+
+                    const { signedUrl, objectUrl } = presignResponse.data;
+
+                    // 2. Upload file directly to R2 using the pre-signed PUT URL
+                    await fetch(signedUrl, {
+                        method: 'PUT',
+                        body: file,
+                        headers: {
+                            'Content-Type': file.type,
+                        },
+                    });
+
+                    // 3. Inform our server about the new image using the final object URL
+                    await axios.post('/api/admin/stadium/images', { imageUrl: objectUrl });
+
+                    alert('사진이 성공적으로 업로드되었습니다.');
+                    fileInput.value = ''; // Reset file input
+                    loadData(); // Reload all data
+                } catch (err) {
+                    console.error('Upload failed:', err);
+                    alert('업로드에 실패했습니다. F12를 눌러 개발자 도구를 열고, Console 탭의 오류 메시지를 확인해주세요.');
+                } finally {
+                    submitButton.disabled = false;
+                    submitButton.textContent = '사진 업로드';
+                }
+            });
+            
+            window.deleteImage = async (id) => {
+                if (confirm('정말 이 사진을 삭제하시겠습니까? 홈 화면 배경에서 즉시 사라집니다.')) {
+                    try {
+                        await axios.delete(\`/api/admin/stadium/images/\${id}\`);
+                        alert('사진이 삭제되었습니다.');
+                        loadData();
+                    } catch (err) {
+                        console.error('Delete failed:', err);
+                        alert('삭제에 실패했습니다.');
+                    }
+                }
+            };
 
             window.switchRequestTab = (tab) => {
                 currentRequestTab = tab;
@@ -899,6 +1073,23 @@ app.get('/admin', (c) => {
     </body>
     </html>
   `)
+})
+
+
+// R2 Object-serving proxy for stadium images
+app.get('/stadium-images/*', async (c) => {
+  const key = c.req.path.substring(1); // remove leading '/'
+  const object = await c.env.FOOTBALL_BUCKET.get(key);
+
+  if (object === null) {
+    return c.notFound();
+  }
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  
+  return c.body(object.body, { headers });
 })
 
 export default app
