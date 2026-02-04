@@ -30,36 +30,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 2. Init UI
     initRoster();
     initSchedule();
-    initStadium();
     initForms();
     initModals();
-    initSlideshow();
 });
-
-function initSlideshow() {
-    const container = document.getElementById('slideshow-container');
-    if (!container) return;
-
-    const slides = container.querySelectorAll('.slide');
-    if (slides.length <= 1) return; // Don't start slideshow if only one image
-
-    let currentSlide = 0;
-
-    function showSlide(index) {
-        slides.forEach((slide, i) => {
-            slide.classList.remove('active');
-        });
-        slides[index].classList.add('active');
-    }
-
-    function nextSlide() {
-        currentSlide = (currentSlide + 1) % slides.length;
-        showSlide(currentSlide);
-    }
-
-    // Change slide every 5 seconds
-    setInterval(nextSlide, 5000);
-}
 
 async function loadTeamData() {
     try {
@@ -67,38 +40,9 @@ async function loadTeamData() {
         if (res.data) {
             teamConfig.roster = res.data.players;
             teamConfig.matches = res.data.matches;
-            teamConfig.stadium = res.data.stadium;
         }
     } catch (err) {
         console.error('Failed to load team data:', err);
-    }
-}
-
-function initStadium() {
-    const { stadium } = teamConfig;
-    if (stadium) {
-        const addressEl = document.getElementById('stadium-address');
-        const fullAddressEl = document.getElementById('stadium-full-address');
-        const mapEl = document.getElementById('stadium-map');
-        const descriptionEl = document.getElementById('stadium-description');
-        const contactEl = document.getElementById('stadium-contact-info');
-
-        if (addressEl) {
-            addressEl.innerText = stadium.address.split(' ')[0];
-        }
-        if (fullAddressEl) {
-            fullAddressEl.innerText = stadium.address;
-        }
-        if (mapEl) {
-            mapEl.src = `https://maps.google.com/maps?t=m&q=loc:${stadium.lat}+${stadium.lng}&ie=UTF8&z=15&output=embed`;
-        }
-        if (descriptionEl) {
-            descriptionEl.innerText = stadium.description;
-        }
-        if (contactEl) {
-            contactEl.innerText = stadium.contact_info;
-            contactEl.style.whiteSpace = 'pre-line';
-        }
     }
 }
 
